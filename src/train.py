@@ -1,3 +1,6 @@
+
+
+
 from gymnasium.wrappers import TimeLimit
 from env_hiv import HIVPatient
 import numpy as np
@@ -6,6 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 import random
+
+
 
 env = TimeLimit(
     env=HIVPatient(domain_randomization=False), max_episode_steps=200
@@ -58,7 +63,7 @@ class DQN2(nn.Module):
         self.fc4 = nn.Linear(64, action_size)  # Final layer for action sizes
         
         # Dropout for regularization
-        self.dropout = nn.Dropout(p=0.2)
+        self.dropout = nn.Dropout(p=0.05380729672098206)
 
     def forward(self, x):
         x = F.leaky_relu(self.fc1(x))  # Using LeakyReLU for activation
@@ -72,21 +77,25 @@ class DQN2(nn.Module):
 
 class ProjectAgent:
     def __init__(self):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.state_dim = 6
         self.action_size = 4
         self.batch_size = 200
-        self.gamma = 0.99
-        self.length_episode = 100  # The time wrapper limits the number of steps in an episode at 200.
-        self.learning_rate = 0.005
+        self.gamma = 0.6695364320849753
+        self.length_episode = 200  # The time wrapper limits the number of steps in an episode at 200.
+        self.learning_rate = 0.09858458727634285
         self.exploration_rate = 1.0
-        self.exploration_decay = 0.995
+        self.exploration_decay = 0.99
         self.min_exploration_rate = 0.01
-        self.memory = ReplayBuffer(10000, device)
+        self.capacity = 10000
+        self.memory = ReplayBuffer(self.capacity, self.device)
         self.max_episode = 100
-        self.model = DQN2(self.state_dim, self.action_size).to(device)
+        self.model = DQN2(self.state_dim, self.action_size).to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self.criterion = nn.MSELoss()
+
+
+
     
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
@@ -134,13 +143,17 @@ class ProjectAgent:
                 state = next_state
                     
             print("Episode ", '{:3d}'.format(episode), 
-                ", exploration rate ", '{:6.2f}'.format(self.exploration_rate), 
+                ", gamma", '{:6.2f}'.format(self.gamma),
+                ", exploration rate ", '{:6.2f}'.format(self.exploration_rate),
+                ", exploration decay ", '{:6.5f}'.format(self.exploration_decay),
+                ", learning rate", '{:6.5f}'.format(self.learning_rate),
                 ", batch size ", '{:5d}'.format(len(self.memory)), 
                 ", episode return ", '{:4.1f}'.format(episode_cum_reward),
                 sep='')
             state, _ = env.reset()
             episode_return.append(episode_cum_reward)
             episode_cum_reward = 0
+            self.save("model.pth")
 
         return episode_return
         
@@ -150,3 +163,4 @@ class ProjectAgent:
     def load(self):
         self.train(env, self.max_episode)
         return torch.load("model.pth")
+
