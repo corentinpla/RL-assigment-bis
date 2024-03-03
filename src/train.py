@@ -1,16 +1,5 @@
-
-
-
 from gymnasium.wrappers import TimeLimit
 from env_hiv import HIVPatient
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from tqdm import tqdm
-import random
-
-
 
 env = TimeLimit(
     env=HIVPatient(domain_randomization=False), max_episode_steps=200
@@ -21,146 +10,146 @@ env = TimeLimit(
 # You have to implement your own agent.
 # Don't modify the methods names and signatures, but you can add methods.
 # ENJOY!
-
-
+import random
+import numpy as np
 class ReplayBuffer:
     def __init__(self, capacity, device):
-        self.capacity = capacity # capacity of the buffer
-        self.data = []
-        self.index = 0 # index of the next cell to be filled
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
         self.device = device
-    def append(self, s, a, r, s_):
-        if len(self.data) < self.capacity:
-            self.data.append(None)
-        self.data[self.index] = (s, a, r, s_)
-        self.index = (self.index + 1) % self.capacity
+    def append(self, state, action, reward, next_state, done):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        self.buffer[self.position] = (state, action, reward, next_state, done)
+        self.position = (self.position + 1) % self.capacity
     def sample(self, batch_size):
-        batch = random.sample(self.data, batch_size)
+        batch = random.sample(self.buffer, batch_size)
         return list(map(lambda x:torch.Tensor(np.array(x)).to(self.device), list(zip(*batch))))
     def __len__(self):
-        return len(self.data)
-
-class DQN(nn.Module):
-    def __init__(self, state_dim, action_size):
-        super(DQN, self).__init__()
-        self.fc1 = nn.Linear(state_dim, 24)
-        self.fc2 = nn.Linear(24, 24)
-        self.fc3 = nn.Linear(24, action_size)
+        return len(self.buffer)
     
-    def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+import torch
+import torch.nn as nn
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+state_dim = env.observation_space.shape[0]
+n_action = env.action_space.n 
+nb_neurons= 250
+
+DQN = torch.nn.Sequential(nn.Linear(state_dim, nb_neurons),
+                          nn.ReLU(),
+                          nn.Linear(nb_neurons, nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(nb_neurons, nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(nb_neurons, nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(nb_neurons, nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(nb_neurons, nb_neurons),
+                          nn.ReLU(), 
+                          nn.Linear(nb_neurons, n_action)).to(device)
+
+def greedy_action(network, state):
+    device = "cuda" if next(network.parameters()).is_cuda else "cpu"
+    with torch.no_grad():
+        Q = network(torch.Tensor(state).unsqueeze(0).to(device))
+        return torch.argmax(Q).item()
     
-class DQN2(nn.Module):
-    def __init__(self, state_dim, action_size):
-        super(DQN2, self).__init__()
-        # Increase the depth and width of the network
-        self.fc1 = nn.Linear(state_dim, 64)  # Increased width
-        self.fc2 = nn.Linear(64, 128)  # Increased width and added a layer
-        self.fc3 = nn.Linear(128, 64)  # Added another layer
-        self.fc4 = nn.Linear(64, action_size)  # Final layer for action sizes
-        
-        # Dropout for regularization
-        self.dropout = nn.Dropout(p=0.05380729672098206)
-
-    def forward(self, x):
-        x = F.leaky_relu(self.fc1(x))  # Using LeakyReLU for activation
-        x = self.dropout(x)  # Apply dropout
-        x = F.leaky_relu(self.fc2(x))  # Using LeakyReLU for activation
-        x = self.dropout(x)  # Apply dropout
-        x = F.leaky_relu(self.fc3(x))  # Using LeakyReLU for activation
-        x = self.fc4(x)  # No activation here to allow for raw output for Q-values
-        return x
-
+# DQN config
+config = {'nb_actions': env.action_space.n,
+          'learning_rate': 0.005,
+          'gamma': 0.99,
+          'buffer_size': 1000000,
+          'epsilon_min': 0.01,
+          'epsilon_max': 1.,
+          'epsilon_decay_period': 10000,
+          'epsilon_delay_decay': 200,
+          'batch_size': 400}
+model = DQN
 
 class ProjectAgent:
     def __init__(self):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.state_dim = 6
-        self.action_size = 4
-        self.batch_size = 200
-        self.gamma = 0.6695364320849753
-        self.length_episode = 200  # The time wrapper limits the number of steps in an episode at 200.
-        self.learning_rate = 0.09858458727634285
-        self.exploration_rate = 1.0
-        self.exploration_decay = 0.99
-        self.min_exploration_rate = 0.01
-        self.capacity = 10000
-        self.memory = ReplayBuffer(self.capacity, self.device)
-        self.max_episode = 100
-        self.model = DQN2(self.state_dim, self.action_size).to(self.device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        self.criterion = nn.MSELoss()
-
-
-
-    
+        self.model = model
+        self.config = config
+        device = "cuda" if next(model.parameters()).is_cuda else "cpu"
+        self.gamma = config['gamma']
+        self.batch_size = config['batch_size']
+        self.nb_actions = config['nb_actions']
+        self.memory = ReplayBuffer(config['buffer_size'], device)
+        self.epsilon_max = config['epsilon_max']
+        self.epsilon_min = config['epsilon_min']
+        self.epsilon_stop = config['epsilon_decay_period']
+        self.epsilon_delay = config['epsilon_delay_decay']
+        self.epsilon_step = (self.epsilon_max-self.epsilon_min)/self.epsilon_stop
+        self.criterion = torch.nn.MSELoss()
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'])
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
-            X, A, R, Y = self.memory.sample(self.batch_size)
+            X, A, R, Y, D = self.memory.sample(self.batch_size)
             QYmax = self.model(Y).max(1)[0].detach()
             #update = torch.addcmul(R, self.gamma, 1-D, QYmax)
-            update = torch.addcmul(R, torch.ones(1), QYmax, value=self.gamma)
+            update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
             QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
             loss = self.criterion(QXA, update.unsqueeze(1))
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step() 
-    
-    def act(self, observation, use_random=False):
-        if np.random.rand() < self.exploration_rate:
-            return np.random.choice(self.action_size)
-        observation = torch.tensor(observation, dtype=torch.float32)
-        q_values = self.model(observation)
-        return torch.argmax(q_values).item()
-    
     def train(self, env, max_episode):
         episode_return = []
         episode = 0
         episode_cum_reward = 0
         state, _ = env.reset()
+        epsilon = self.epsilon_max
         step = 0
 
-        for episode in tqdm(range(max_episode)):
-            for step in range(self.length_episode):
-                # Update exploration rate
-                self.exploration_rate = max(self.min_exploration_rate, self.exploration_rate * self.exploration_decay)
-                
-                # select epsilon-greedy action
-                action = self.act(state)
+        while episode < max_episode:
+            # update epsilon
+            if step > self.epsilon_delay:
+                epsilon = max(self.epsilon_min, epsilon-self.epsilon_step)
 
-                # step
-                next_state, reward, _, _, _ = env.step(action)
-                self.memory.append(state, action, reward, next_state)
-                episode_cum_reward += reward
+            # select epsilon-greedy action
+            if np.random.rand() < epsilon:
+                action = env.action_space.sample()
+            else:
+                action = greedy_action(self.model, state)
 
-                # train
-                self.gradient_step()
-                
-                # update state
+            # step
+            next_state, reward, done, trunc, _ = env.step(action)
+            self.memory.append(state, action, reward, next_state, done)
+            episode_cum_reward += reward
+
+            # train
+            self.gradient_step()
+
+            # next transition
+            step += 1
+            if done or trunc:
+                episode += 1
+                print("Episode ", '{:3d}'.format(episode), 
+                      ", epsilon ", '{:6.2f}'.format(epsilon), 
+                      ", batch size ", '{:5d}'.format(len(self.memory)), 
+                      ", episode return ", '{:4.1f}'.format(episode_cum_reward),
+                      sep='')
+                state, _ = env.reset()
+                episode_return.append(episode_cum_reward)
+                episode_cum_reward = 0
+            else:
                 state = next_state
-                    
-            print("Episode ", '{:3d}'.format(episode), 
-                ", gamma", '{:6.2f}'.format(self.gamma),
-                ", exploration rate ", '{:6.2f}'.format(self.exploration_rate),
-                ", exploration decay ", '{:6.5f}'.format(self.exploration_decay),
-                ", learning rate", '{:6.5f}'.format(self.learning_rate),
-                ", batch size ", '{:5d}'.format(len(self.memory)), 
-                ", episode return ", '{:4.1f}'.format(episode_cum_reward),
-                sep='')
-            state, _ = env.reset()
-            episode_return.append(episode_cum_reward)
-            episode_cum_reward = 0
-            self.save("model.pth")
 
         return episode_return
-        
+    def act(self, observation):
+        s = observation
+        a = greedy_action(self.model, s)
+        return a
+
     def save(self, path):
-        torch.save(self.model, path)
+        torch.save(self.model.state_dict(), path)
 
     def load(self):
-        self.train(env, self.max_episode)
-        return torch.load("model.pth")
+        self.model.load_state_dict(torch.load("DQN.pth"))
 
+#agent = ProjectAgent()
+#episode_return = agent.train(env, 50)
+#agent.save("DQN.pth")
